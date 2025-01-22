@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <link rel="stylesheet" type="text/css" href="style.css" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebSocket Chat</title>
+</head>
+
+<body>
+  <!-- 왼쪽 블럭 -->
+  <div id="room-list">
+    <h3>방 목록</h3>
+    <label for="roomSearch">방 검색:</label>
+    <input type="text" id="roomSearch" placeholder="검색" oninput="filterRooms()" />
+    <ul id="rooms"></ul>
+    <div class="room-create">
+      <input type="text" id="createRoom" placeholder="방 이름" />
+      <button id="createRoomBtn"></button>
+    </div>
+  </div>
+
+  <!-- 가운데 블럭 -->
+  <div id="chat-box">
+    <div id="current-room">
+      <span>현재 방: 로비</span>
+      <button id="clearMessages" style="float: right; padding: 5px"></button>
+    </div>
+
+    <div id="messages"></div>
+    <div id="input">
+      <input type="text" id="messageInput" placeholder="메시지를 입력하세요" />
+      <button id="sendMessage"></button>
+      <button id="leaveRoom" disabled></button>
+    </div>
+  </div>
+
+  <!-- 오른쪽 블럭 -->
+  <div id="user-list">
+    <h3>참여자 목록</h3>
+    <ul id="users"></ul>
+  </div>
+
+  <script>
+    const ws = new WebSocket("ws://192.168.0.110:8001");
+    let username = getParams();
+
+    let currentRoom = "로비";
+    let roomList = [];
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "setUsername", username }));
+      ws.send(JSON.stringify({ type: "joinRoom", roomName: "로비" }));
+    };
+
+    // 메시지 처리
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+
+      if (data.type === "roomList") {
+        roomList = data.rooms.filter((room) => room !== "로비");
+        renderRoomList(roomList);
+      } else if (data.type === "usersInRoom") {
+        updateUserList(data.users);
+      } else if (data.type === "chat") {
+        // "안내"라는 유저의 메시지는 시스템 메시지로 처리
+        const isSystemMessage = data.username === "안내"; // "안내"이면 system-message로 처리
+        appendMessage(data.message, data.username, isSystemMessage); // username도 함께 전달
+      } else if (data.type === "welcome") {
+        appendMessage(data.message, "안내", true); // 환영 메시지는 시스템 메시지로 처리
+      } else if (data.type === "error") {
+        alert(data.message);
+      }
+    };
+
+    ws.onerror = (error) => {
+      console.error("WebSocket error:", error);
+    };
+
+    ws.onclose = () => {
+      alert("서버와의 연결이 끊어졌습니다.");
+    };
+
+    //메시지 지우기 버튼
+    document.getElementById("clearMessages").onclick = () => {
+      const messagesElement = document.getElementById("messages");
+      messagesElement.innerHTML = ""; // 채팅창 전체 메시지 초기화
+    };
+
+    //방 생성 버튼
+    document.getElementById("createRoomBtn").onclick = () => {
+      const roomName = document.getElementById("createRoom").value.trim();
+      if (roomName) {
+        ws.send(JSON.stringify({ type: "createRoom", roomName }));
+        currentRoom = roomName; // 방 이름 업데이트
+        updateCurrentRoomDisplay(currentRoom); // 화면 갱신
+        toggleLeaveRoomButton(); // 나가기 버튼 갱신
+        document.getElementById("messages").innerHTML = ""; // 메시지 초기화
+      } else if (!roomName) {
+        alert("방 이름이 입력되지 않았습니다."); // 방 이름 없으면 알럿 띄우기
+        return;
+      }
+      updateCurrentRoomDisplay(roomName);
+      currentRoom = "";
+      toggleLeaveRoomButton(); // 방에 입장할 때 활성화
+    };
+
+    //방 나가기 버튼
+    document.getElementById("leaveRoom").onclick = () => {
+      ws.send(JSON.stringify({ type: "leaveRoom", roomName: currentRoom }));
+      currentRoom = "로비"; // 현재 방 상태를 로비로 업데이트
+      updateCurrentRoomDisplay(currentRoom);
+      ws.send(JSON.stringify({ type: "joinRoom", roomName: "로비" }));
+      document.getElementById("messages").innerHTML = ""; // 메시지 초기화
+      toggleLeaveRoomButton(); // 버튼 상태 비활성화
+    };
+
+    // 엔터키로 메시지 전송
+    document
+      .getElementById("messageInput")
+      .addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          sendMessage();
+          event.preventDefault(); // 기본 동작 방지
+        }
+      });
+
+    //메시지 전송 버튼
+    document.getElementById("sendMessage").onclick = sendMessage;
+
+    function sendMessage() {
+      const messageInput = document.getElementById("messageInput");
+      const message = messageInput.value.trim();
+      if (message) {
+        ws.send(JSON.stringify({ type: "message", message }));
+        messageInput.value = ""; // 메시지 전송 후 입력칸 비우기
+      }
+    }
+
+    // 방 이름 갱신
+    function renderRoomList(rooms) {
+      const roomsElement = document.getElementById("rooms");
+      roomsElement.innerHTML = "";
+      rooms.forEach((room) => {
+        const roomItem = document.createElement("li");
+        roomItem.textContent = room;
+        roomItem.className = "room-item";
+        roomItem.onclick = () => {
+          if (currentRoom !== "로비") {
+            alert("현재 방을 나간 뒤에 다른 방에 입장할 수 있습니다.");
+            return;
+          }
+          ws.send(JSON.stringify({ type: "joinRoom", roomName: room }));
+          currentRoom = room;
+          updateCurrentRoomDisplay(currentRoom);
+          document.getElementById("messages").innerHTML = ""; // 메시지 초기화
+        };
+        roomsElement.appendChild(roomItem);
+      });
+    }
+
+    //방 나가기 버튼 활성 변경
+    function toggleLeaveRoomButton() {
+      const leaveRoomButton = document.getElementById("leaveRoom");
+      if (currentRoom === "로비") {
+        leaveRoomButton.disabled = true; // 로비에서는 비활성화
+      } else {
+        leaveRoomButton.disabled = false; // 다른 방에서는 활성화
+      }
+    }
+
+    // 자동 스크롤
+    function scrollToBottom() {
+      const messages = document.getElementById("messages");
+      messages.scrollTop = messages.scrollHeight;
+    }
+
+    //유저 목록 갱신
+    function updateUserList(users) {
+      const usersElement = document.getElementById("users");
+      usersElement.innerHTML = "";
+      users.forEach((user) => {
+        const userItem = document.createElement("li");
+        userItem.textContent = user;
+        usersElement.appendChild(userItem);
+      });
+    }
+
+    // 중앙 상단 방 이름 갱신
+    function updateCurrentRoomDisplay(roomName) {
+      const currentRoomElement = document.getElementById("current-room");
+      currentRoomElement.innerHTML = `현재 방: ${roomName} <button id="clearMessages" style="float: right; padding: 5px"></button>`;
+      toggleLeaveRoomButton(); // 방 이름 업데이트 시 버튼 상태도 업데이트
+      document.getElementById("clearMessages").onclick = () => {
+        document.getElementById("messages").innerHTML = ""; // 메시지 초기화
+      };
+    }
+
+    // 메시지 출력
+    function appendMessage(message, username, isSystem = false) {
+      const messagesElement = document.getElementById("messages");
+      const messageElement = document.createElement("div");
+
+      // 사용자 이름과 메시지를 결합하여 표시
+      const displayMessage = isSystem ? message : `${username}: ${message}`;
+
+      messageElement.textContent = displayMessage;
+      messageElement.classList.add(
+        isSystem ? "system-message" : "chat-message"
+      );
+      messagesElement.appendChild(messageElement);
+      messagesElement.scrollTop = messagesElement.scrollHeight;
+    }
+
+    //방 이름 검색
+    function filterRooms() {
+      const searchTerm = document
+        .getElementById("roomSearch")
+        .value.toLowerCase();
+      const filteredRooms = roomList.filter((room) =>
+        room.toLowerCase().includes(searchTerm)
+      );
+      renderRoomList(filteredRooms);
+    }
+
+    function saveMessageToLocalStorage(message) {
+      let chatMessages = JSON.parse(localStorage.getItem("chatMessages")) || [];
+      chatMessages.push(message);
+      localStorage.setItem("chatMessages", JSON.stringify(chatMessages));
+    }
+/*
+    function getParams() {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("nickName");
+
+    }
+*/
+
+    function getParams() {
+
+      const savedNickName = localStorage.getItem("nickName");
+
+      if(savedNickName){
+        return savedNickName;
+      } else{
+        const params = new URLSearchParams(window.location.search);
+        const nickName = params.get("nickName");
+
+        if(nickName){
+          localStorage.setItem("nickName", nickName);
+          return nickName;
+        }
+
+        return null;
+      }
+    }
+
+    const newUrl = "/chat"; // 실제로는 다른 URL을 표시할 수 있습니다.
+    history.replaceState({}, "", newUrl);
+    getParams();
+
+    window.onload = function () {
+      const validUrlPattern = /\/chat/; // 유효한 URL 패턴을 설정 (여기서는 "/chat"만 허용)
+      const currentUrl = window.location.pathname;
+
+    
+    if (!validUrlPattern.test(currentUrl)) {
+      // URL이 유효하지 않으면 페이지를 유지하고 URL을 변경
+      alert("잘못된 URL입니다. 현재 페이지로 돌아갑니다.");
+      history.replaceState({}, "", "/chat"); // "/chat"으로 URL을 변경
+    }
+
+    const savedNickName = getParams();
+    if(!savedNickName){
+      alert("xx");
+      window.location.href = "/app";
+    }
+
+  };
+
+    // URL이 수정될 때마다 확인하는 코드
+    window.onpopstate = function (event) {
+      const validUrlPattern = /\/chat/; // 유효한 URL 패턴을 설정
+      const currentUrl = window.location.pathname;
+
+      if (!validUrlPattern.test(currentUrl)) {
+        // URL이 유효하지 않으면 페이지를 유지하고 URL을 변경
+        alert("잘못된 URL입니다. 현재 페이지로 돌아갑니다.");
+        history.replaceState({}, "", "/chat"); // "/chat"으로 URL을 변경
+      }
+    };
+
+  </script>
+</body>
+
+</html>
