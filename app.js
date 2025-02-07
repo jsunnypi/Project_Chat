@@ -2,14 +2,20 @@
 
 const express = require("express");
 const { WebSocketServer } = require("ws");
-const app = express();
 const wss = new WebSocketServer({ port: 8001 });
-
-// 방과 사용자 정의
-let rooms = { 로비: [] };
-let clients = new Map();
-
+const app = express();
+const bodyParser = require("body-parser");
+app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static("public"));
+app.listen(8000, () => {
+  console.log("Server is running on http://localhost:8000");
+});
+
+app.post("/", (req, res) => {
+  const user = req.body.user;
+  res.cookie("user", user, { maxAge: 3600000, httpOnly: false }); // 쿠키에 user 저장 (1시간 유효)
+  res.redirect("/chat");
+});
 
 app.get("*", (req, res) => {
   if (req.path !== "/chat") {
@@ -18,10 +24,13 @@ app.get("*", (req, res) => {
     res.sendFile(__dirname + "/public/index.html");
   }
 });
+// 방과 사용자 정의
+let rooms = { 로비: [] };
+let clients = new Map();
 
 // 유저가 접속하면 실행되는 코드
 wss.on("connection", (ws) => {
-  let currentUser = null;
+  let currentUser = "";
   let currentRoom = "로비";
 
   joinRoom(ws, "로비"); //로비 접속
@@ -60,7 +69,7 @@ wss.on("connection", (ws) => {
           );
         }
       } else if (data.type === "setUsername") {
-        // 유저 이름 설정 차후에는 수정 필요함
+        //유저 이름 설정 차후에는 수정 필요함
         currentUser = data.username;
         clients.set(ws, { username: currentUser, room: currentRoom });
         updateRoomUsers(currentRoom);
@@ -211,8 +220,4 @@ wss.on("connection", (ws) => {
       client.send(JSON.stringify({ type: "roomList", rooms: roomList }));
     });
   }
-});
-
-app.listen(8000, () => {
-  console.log("Server is running on http://localhost:8000");
 });
